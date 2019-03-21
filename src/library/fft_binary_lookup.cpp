@@ -449,34 +449,44 @@ bool FFTBinaryLookup::found()
 }
 
 static cl_int getSingleBinaryFromProgram(cl_program program,
-                                         std::vector<unsigned char*> & binary)
+                                         std::vector<unsigned char*> & binary,
+                                         size_t& size)
 {
     // 3 - Determine the size of each program binary
-    size_t size;
-    cl_int err = clGetProgramInfo(program, CL_PROGRAM_BINARY_SIZES,
-                                  sizeof(size_t),
-                                  &size, NULL);
+    cl_uint num_devices;
+    cl_int err = clGetProgramInfo(program, CL_PROGRAM_NUM_DEVICES,
+                                  sizeof(cl_uint),
+                                  &num_devices, NULL);
     if (err != CL_SUCCESS)
     {
-        std::cerr << "Error querying for program binary sizes" << std::endl;
+        std::cerr << "Error querying for program binary sizes: CL_PROGRAM_NUM_DEVICES " << err << std::endl;
         return err;
     }
 
-    binary.resize(size);
-    binary[0] = new unsigned char[size];
-
-    unsigned char * binary_address[1] = { binary[0] };
-
-    // 4 - Get all of the program binaries
-    err = clGetProgramInfo(program, CL_PROGRAM_BINARIES, 1 * sizeof(unsigned char*),
-                           binary_address, NULL);
-
-
+    std::vector<size_t> sizes(num_devices);
+    err = clGetProgramInfo(program, CL_PROGRAM_BINARY_SIZES,
+                           num_devices * sizeof(size_t),
+                           sizes.data(), NULL);
     if (err != CL_SUCCESS)
     {
-		delete[] binary[0];
-#if CAPS_DEBUG
-        std::cerr << "Error querying for program binaries" << std::endl;
+        std::cerr << "Error querying for program binary sizes CL_PROGRAM_BINARY_SIZES " << err << std::endl;
+        return err;
+    }
+
+    binary = std::vector<unsigned char*>(num_devices, NULL);
+    binary[0] = new unsigned char[sizes[0]];
+    size = sizes[0];
+
+    unsigned char ** binary_address = binary.data();
+
+    // 4 - Get all of the program binaries
+    err = clGetProgramInfo(program, CL_PROGRAM_BINARIES, num_devices * sizeof(unsigned char*),
+                           binary_address, NULL);
+    if (err != CL_SUCCESS)
+    {
+        delete[] binary[0];
+#if !CAPS_DEBUG
+        std::cerr << "Error querying for program binaries CL_PROGRAM_BINARIES " << err << std::endl;
 #endif
         return err;
     }
@@ -535,7 +545,8 @@ cl_int FFTBinaryLookup::populateCache()
     this->m_header.magic_key[3] = '\0';
 
     std::vector<unsigned char*> data;
-    cl_int err = getSingleBinaryFromProgram(this->m_program, data);
+    size_t size;
+    cl_int err = getSingleBinaryFromProgram(this->m_program, data, size);
 
     if (err != CL_SUCCESS)
     {
@@ -543,7 +554,7 @@ cl_int FFTBinaryLookup::populateCache()
     }
 
     this->m_header.header_size = sizeof(Header);
-    this->m_header.binary_size = data.size();
+    this->m_header.binary_size = size;
     this->m_header.whole_file_size = this->m_header.header_size + this->m_header.binary_size + this->m_header.signature_size;
 
     writeCacheFile(data); // ignore return code, because it does nothing if
